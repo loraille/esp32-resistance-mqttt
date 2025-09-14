@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Config Ballon</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <div class="card">
+    <h2>⚙️ Configuration</h2>
+    <form id="configForm">
+      <label>Heure début :
+        <input type="number" id="start" name="start" min="0" max="23">
+      </label>
+      <label>Heure fin :
+        <input type="number" id="end" name="end" min="0" max="23">
+      </label>
+      <label>Température max :
+        <input type="number" step="0.1" id="tmax" name="tmax">
+      </label>
+      <label>Réarmement :
+        <input type="number" step="0.1" id="treset" name="treset">
+      </label>
+      <button type="submit">💾 Sauvegarder</button>
+    </form>
+    <p><a href="/">← Retour</a></p>
+  </div>
+</body>
+</html>

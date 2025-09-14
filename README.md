@@ -1,14 +1,16 @@
-# ESP32 Résistance MQTT
+# ESP32 Ballon MQTT
 
-Contrôle d’un relais normalement fermé (NC) via MQTT, lecture de température (DS18B20), synchronisation NTP et gestion d’une fenêtre d’activité journalière (9h → 18h) avec mise en deep sleep en dehors de cette plage.
+Contrôle intelligent d'un ballon d'eau chaude via MQTT et interface web. Lecture de température (DS18B20), système de sécurité automatique, fenêtre d'activité configurable et interface web pour le contrôle et la configuration.
 
 ## Fonctionnalités
 
-- Connexion Wi‑Fi et synchronisation horaire via NTP
-- Fenêtre active : 09:00–18:00, deep sleep le reste du temps (≈ 15 h)
-- Lecture de la température (DS18B20) et publication sur MQTT toutes les 10 s
-- Réception de commandes MQTT `ON`/`OFF` pour piloter le relais NC
-- Indicateurs LED : verte (ESP32 actif), rouge (relais activé → circuit ouvert)
+- **Interface Web** : Contrôle et monitoring via navigateur
+- **API REST** : Endpoints pour contrôle et configuration
+- **Système de sécurité** : Coupure automatique si température > seuil max
+- **Configuration web** : Heures actives, températures de sécurité configurables
+- **MQTT** : Publication température et réception commandes
+- **Fenêtre d'activité** : Contrôle possible uniquement dans la plage horaire configurée
+- **Indicateurs LED** : verte (ESP32 actif), rouge (relais activé)
 
 ## Matériel
 
@@ -27,51 +29,81 @@ Contrôle d’un relais normalement fermé (NC) via MQTT, lecture de températur
 
 Relais NC : au repos (LOW), le circuit est fermé. Quand activé (HIGH), le circuit s’ouvre.
 
+## Interface Web
+
+L'ESP32 héberge une interface web accessible via son adresse IP :
+
+- **Page principale** (`/`) : Monitoring température, statut relais, contrôle
+- **Configuration** (`/config.html`) : Paramétrage heures actives et températures de sécurité
+- **API REST** :
+  - `GET /api/status` : État température, relais, statut sécurité
+  - `POST /api/relay` : Commande relais (`{"command": "ON"}` ou `"OFF"`)
+  - `GET /api/config` : Configuration actuelle
+  - `POST /api/config` : Sauvegarde nouvelle configuration
+
 ## MQTT
 
-- Broker (par défaut) : `broker.hivemq.com:1883` (exemple public)
-- Authentification : `mqtt_user` / `mqtt_pass` (à adapter ou supprimer côté broker)
-- Topics :
-  - Souscription commandes relais : `esp32/relais/command` → charge utile `ON` ou `OFF`
-  - Publication température : `esp32/temperature` (QoS par défaut, retained true)
+- **Broker** : Configuré dans `include/config.h`
+- **Topics** :
+  - `ballon/temperature` : Publication température (toutes les 15s)
+  - `ballon/relais/state` : État du relais (`ON`/`OFF`)
+  - `ballon/relais/command` : Commandes relais (`ON`/`OFF`)
+  - `ballon/status` : Statut système (`ONLINE`/`SAFETY`/`RESET`)
 
-Exemples :
+Exemples :
 
 ```text
-Souscrire : esp32/relais/command   (payload: ON | OFF)
-Publier   : esp32/temperature      (ex: 22.31)
+Souscrire : ballon/relais/command   (payload: ON | OFF)
+Publier   : ballon/temperature      (ex: 22.3)
+Publier   : ballon/status           (ONLINE | SAFETY | RESET)
 ```
 
-## Comportement horaire et deep sleep
+## Configuration
 
-- Au démarrage, l’heure est synchronisée via NTP.
-- Si l’heure n’est pas dans [09:00, 18:00), l’ESP32 passe immédiatement en deep sleep jusqu’au lendemain 09:00 (réveil temporisé ≈ 15 h).
-- Pendant la plage active, la boucle maintient MQTT et publie la température toutes les 10 s. À 18:00, passage en deep sleep.
+### Configuration initiale
+
+1. **Wi-Fi et MQTT** : Modifier `include/config.h` avec vos paramètres
+2. **Interface web** : Accéder à l'IP de l'ESP32 pour configurer :
+   - **Heures actives** : Plage horaire où le contrôle est autorisé (défaut: 9h-23h)
+   - **Température max** : Seuil de sécurité (défaut: 70°C)
+   - **Température reset** : Seuil de réarmement (défaut: 65°C)
+
+### Système de sécurité
+
+- **Coupure automatique** : Si température ≥ seuil max, le relais se coupe automatiquement
+- **Réarmement** : Quand température ≤ seuil reset, le système se réarme
+- **Blocage commandes** : Pendant la sécurité active, les commandes sont bloquées
+
+### Comportement horaire
+
+- **Synchronisation NTP** : Heure automatique via `pool.ntp.org`
+- **Fenêtre active** : Contrôle possible uniquement dans la plage configurée
+- **Hors plage** : Le relais se coupe automatiquement si allumé
 
 ## Prérequis
 
-- PlatformIO (VS Code ou CLI)
-- Carte plateforme : `espressif32`
-- Bibliothèques Arduino :
-  - `WiFi` (builtin ESP32)
-  - `PubSubClient`
-  - `OneWire`
-  - `DallasTemperature`
-  - `NTPClient`
-
-Ces libs peuvent être ajoutées via PlatformIO (`lib_deps`) ou le gestionnaire de bibliothèques.
+- **PlatformIO** (VS Code ou CLI)
+- **Carte** : ESP32 (DevKit ou équivalent)
+- **Bibliothèques** (automatiquement installées via `platformio.ini`) :
+  - `DallasTemperature` (capteur DS18B20)
+  - `PubSubClient` (MQTT)
+  - `OneWire` (protocole 1-Wire)
+  - `ArduinoJson` (API REST)
 
 ## Installation & Build
 
-1. Cloner ce dépôt dans PlatformIO ou copier le dossier du projet.
-2. Ouvrir le projet dans VS Code (extension PlatformIO installée).
-3. Adapter la configuration dans `src/main.cpp` :
-   - `ssid`, `password` : identifiants Wi‑Fi
-   - `mqtt_server`, `mqtt_port`, `mqtt_user`, `mqtt_password`
-   - `mqtt_topic_subscribe`, `mqtt_topic_publish_temp` (si besoin)
-4. Connecter la carte ESP32 et sélectionner le bon port série.
-5. Compiler et téléverser via PlatformIO : Build → Upload.
-6. Ouvrir le moniteur série à 115200 bauds pour suivre les logs.
+1. **Cloner le projet** dans PlatformIO
+2. **Configuration** : Modifier `include/config.h` :
+   ```cpp
+   #define WIFI_SSID "votre_wifi"
+   #define WIFI_PASSWORD "votre_mot_de_passe"
+   #define MQTT_SERVER "192.168.1.xxx"
+   #define MQTT_USER "votre_user"
+   #define MQTT_PASSWORD "votre_password"
+   ```
+3. **Upload** : Compiler et téléverser via PlatformIO
+4. **Upload SPIFFS** : Téléverser les fichiers web (`data/` → SPIFFS)
+5. **Test** : Accéder à l'IP de l'ESP32 dans un navigateur
 
 ## Indicateurs LED
 
@@ -80,18 +112,67 @@ Ces libs peuvent être ajoutées via PlatformIO (`lib_deps`) ou le gestionnaire 
 
 ## Dépannage
 
-- Pas de capteur : vérifier le DS18B20, la résistance 4.7 kΩ et le `GPIO 4`.
-- Pas de Wi‑Fi : vérifier `ssid/password`, la couverture et la configuration régionale.
-- MQTT non connecté : vérifier l’IP/nom de domaine du broker, le port et les identifiants.
-- Heure incorrecte : vérifier l’accès NTP (pare‑feu) et la connectivité Internet.
+### Problèmes courants
+
+- **Interface web inaccessible** : Vérifier l'IP de l'ESP32 dans le moniteur série
+- **Température -127°C** : Vérifier le DS18B20, résistance 4.7kΩ et GPIO 4
+- **Wi-Fi non connecté** : Vérifier `WIFI_SSID`/`WIFI_PASSWORD` dans `config.h`
+- **MQTT déconnecté** : Vérifier `MQTT_SERVER`, port et identifiants
+- **Relais ne répond pas** : Vérifier GPIO 26 et alimentation du module relais
+- **Configuration non sauvegardée** : Vérifier que SPIFFS est initialisé
+
+### Logs utiles
+
+- Moniteur série à 115200 bauds
+- Messages de statut MQTT sur `ballon/status`
+- LED verte : ESP32 actif, LED rouge : relais activé
 
 ## Personnalisation
 
-- Plage horaire : adapter la logique dans `setup()` et `loopActive()` (calcul heure via NTP).
-- Durée de deep sleep : changer `SLEEP_DURATION_US` (µs) dans `src/main.cpp`.
-- Broches : modifier les `#define` (`RELAY_PIN`, `LED_*`, `ONE_WIRE_BUS`).
+### Broches GPIO
+
+Modifier dans `src/main.cpp` :
+
+```cpp
+#define ONE_WIRE_BUS    4    // DS18B20
+#define RELAY_PIN       26   // Commande relais
+#define LED_ACTIVE_PIN  25   // LED verte
+#define LED_RELAY_PIN   27   // LED rouge
+```
+
+### Topics MQTT
+
+Modifier dans `src/main.cpp` :
+
+```cpp
+const char* mqtt_topic_temp    = "ballon/temperature";
+const char* mqtt_topic_state   = "ballon/relais/state";
+const char* mqtt_topic_command = "ballon/relais/command";
+const char* mqtt_topic_status  = "ballon/status";
+```
+
+### Interface web
+
+- Modifier les fichiers dans `data/` (HTML, CSS, JS)
+- Re-uploader SPIFFS après modification
+
+## Structure du projet
+
+```
+esp32-resistance-mqtt/
+├── src/
+│   └── main.cpp              # Code principal ESP32
+├── include/
+│   └── config.h              # Configuration Wi-Fi/MQTT
+├── data/                     # Interface web (SPIFFS)
+│   ├── index.html            # Page principale
+│   ├── config.html           # Page configuration
+│   ├── style.css             # Styles CSS
+│   └── script.js             # JavaScript
+├── platformio.ini            # Configuration PlatformIO
+└── README.md                 # Documentation
+```
 
 ## Licence
 
 Ce projet est fourni tel quel, sans garantie. Adaptez la licence selon vos besoins.
-# esp32-resistance-mqttt

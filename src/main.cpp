@@ -7,7 +7,7 @@
 #include <FS.h>
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
-#include <config.h>  // ⚠️ WIFI_SSID, WIFI_PASSWORD, MQTT_SERVER, MQTT_PORT, MQTT_USER, MQTT_PASSWORD
+#include "config.h"  // ⚠️ WIFI_SSID, WIFI_PASSWORD, MQTT_SERVER, MQTT_PORT, MQTT_USER, MQTT_PASSWORD
 
 // ==================== BROCHES ====================
 #define ONE_WIRE_BUS    4
@@ -27,6 +27,7 @@ WebServer server(80);
 const char* mqtt_topic_temp    = "ballon/temperature";
 const char* mqtt_topic_state   = "ballon/relais/state";
 const char* mqtt_topic_command = "ballon/relais/command";
+const char* mqtt_topic_safety  = "ballon/safety";
 const char* mqtt_topic_status  = "ballon/status";
 
 // ==================== VARIABLES ====================
@@ -78,35 +79,51 @@ void saveConfig() {
   file.close();
 }
 
-// ==================== UTILS ====================
+// ==================== UTIL ====================
 bool isActiveHour() {
   time_t now = time(nullptr);
   struct tm *ptm = localtime(&now);
   if (!ptm) return true;
   int hour = ptm->tm_hour;
-  if (config.active_start_hour < config.active_end_hour) {
-    return (hour >= config.active_start_hour && hour < config.active_end_hour);
+
+  int start = config.active_start_hour;
+  int end   = config.active_end_hour;
+
+  // Si l’utilisateur met 24 → on considère que c’est minuit (0)
+  if (end == 24) end = 0;
+
+  if (start < end) {
+    return (hour >= start && hour < end);
   } else {
-    return (hour >= config.active_start_hour || hour < config.active_end_hour);
+    return (hour >= start || hour < end);
   }
 }
+
 
 // ==================== SÉCURITÉ ====================
 void checkSafety() {
   sensors.requestTemperatures();
   float temp = sensors.getTempCByIndex(0);
-  if (temp != DEVICE_DISCONNECTED_C) {
-    if (temp >= config.temp_max && relayState && !safetyActive) {
-      relayState = false;
-      digitalWrite(RELAY_PIN, LOW);
-      digitalWrite(LED_RELAY_PIN, LOW);
-      safetyActive = true;
-      mqttClient.publish(mqtt_topic_state, "OFF", true);
-      mqttClient.publish(mqtt_topic_status, "SAFETY", true);
-    } else if (temp <= config.temp_reset && safetyActive) {
-      safetyActive = false;
-      mqttClient.publish(mqtt_topic_status, "RESET", true);
-    }
+
+  if (temp == DEVICE_DISCONNECTED_C) return;  // Capteur absent
+
+  // 🚨 Déclenchement sécurité
+  if (temp >= config.temp_max && relayState && !safetyActive) {
+    relayState = false;
+    digitalWrite(RELAY_PIN, LOW);
+    digitalWrite(LED_RELAY_PIN, LOW);
+    safetyActive = true;
+
+    mqttClient.publish(mqtt_topic_state, "OFF", true);
+    mqttClient.publish(mqtt_topic_safety, "SAFETY", true);
+    Serial.println("🛑 Sécurité activée -> SAFETY");
+  }
+
+  // ✅ Réarmement automatique (hystérésis)
+  else if (safetyActive && temp <= config.temp_reset) {
+    safetyActive = false;
+    mqttClient.publish(mqtt_topic_safety, "OFF", true);
+    Serial.println("✅ Sécurité réarmée automatiquement -> OFF");
   }
 }
 
@@ -127,11 +144,9 @@ void callbackMQTT(char* topic, byte* payload, unsigned int length) {
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
   msg.trim();
   if (String(topic) == mqtt_topic_command) {
-    if (msg == "ON" && !safetyActive && isActiveHour()) {
-      relayState = true;
-    } else if (msg == "OFF") {
-      relayState = false;
-    }
+    if (msg == "ON" && !safetyActive && isActiveHour()) relayState = true;
+    else if (msg == "OFF") relayState = false;
+
     digitalWrite(RELAY_PIN, relayState ? HIGH : LOW);
     digitalWrite(LED_RELAY_PIN, relayState ? HIGH : LOW);
     mqttClient.publish(mqtt_topic_state, relayState ? "ON" : "OFF", true);
@@ -142,13 +157,16 @@ void reconnectMQTT() {
   while (!mqttClient.connected()) {
     if (mqttClient.connect("ESP32Ballon", MQTT_USER, MQTT_PASSWORD)) {
       mqttClient.subscribe(mqtt_topic_command);
+
       mqttClient.publish(mqtt_topic_status, "ONLINE", true);
       mqttClient.publish(mqtt_topic_state, relayState ? "ON" : "OFF", true);
+      mqttClient.publish(mqtt_topic_safety, safetyActive ? "SAFETY" : "OFF", true);  // ✅
     } else {
       delay(5000);
     }
   }
 }
+
 
 // ==================== API JSON ====================
 void setupApi() {
@@ -232,23 +250,30 @@ void setup() {
 
 // ==================== LOOP ====================
 void loop() {
+  // Reconnexion MQTT si nécessaire
   if (!mqttClient.connected()) reconnectMQTT();
   mqttClient.loop();
+
+  // Gestion serveur web/API
   server.handleClient();
 
+  // LED indiquant si on est dans les heures actives
   digitalWrite(LED_ACTIVE_PIN, isActiveHour() ? HIGH : LOW);
 
+  // Envoi régulier de la température toutes les 15 secondes
   if (millis() - lastMqtt > 15000) {
     sensors.requestTemperatures();
     float temp = sensors.getTempCByIndex(0);
     if (temp != DEVICE_DISCONNECTED_C) {
-      mqttClient.publish(mqtt_topic_temp, String(temp,1).c_str(), true);
+      mqttClient.publish(mqtt_topic_temp, String(temp, 1).c_str(), true);
     }
     lastMqtt = millis();
   }
 
+  // Vérification sécurité et publication de l'état
   checkSafety();
 
+  // Coupure relais en dehors des heures actives
   if (!isActiveHour() && relayState) {
     relayState = false;
     digitalWrite(RELAY_PIN, LOW);
@@ -256,3 +281,4 @@ void loop() {
     mqttClient.publish(mqtt_topic_state, "OFF", true);
   }
 }
+

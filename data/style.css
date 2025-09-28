@@ -26,4 +26,67 @@ body {
     cursor: pointer;
   }
   button:hover { background: #219150; }
+  /* Bouton Sauvegarder déjà stylé */
+.save-btn {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: none;
+  background: linear-gradient(90deg,#2b8cff,#0066ff);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(43,140,255,0.24);
+  transition: background 0.2s, transform 0.15s;
+}
+.save-btn:active { transform: translateY(1px); }
+
+/* Nouveau bouton Retour */
+.btn-retour {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  background: #f0f4f8;
+  color: #1a2b3c;
+  text-decoration: none;
+  font-weight: 500;
+  border: 1px solid #d0d7de;
+  transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+}
+
+.btn-retour:hover {
+  background: #e2e8f0;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.08);
+}
+
+.btn-retour:active {
+  transform: translateY(1px);
+  background: #cbd5e1;
+}
+/* Bouton Configuration */
+.btn-config {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  background: linear-gradient(90deg,#2b8cff,#0066ff);
+  color: white;
+  font-weight: 600;
+  text-decoration: none;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(43,140,255,0.24);
+  transition: background 0.2s, transform 0.15s;
+}
+
+.btn-config:hover {
+  background: linear-gradient(90deg,#0066ff,#004bcc);
+  transform: translateY(-2px);
+}
+
+.btn-config:active {
+  transform: translateY(1px);
+}
+
   

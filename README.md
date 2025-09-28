@@ -36,7 +36,7 @@ L'ESP32 héberge une interface web accessible via son adresse IP :
 - **Page principale** (`/`) : Monitoring température, statut relais, contrôle
 - **Configuration** (`/config.html`) : Paramétrage heures actives et températures de sécurité
 - **API REST** :
-  - `GET /api/status` : État température, relais, statut sécurité
+  - `GET /api/status` : État température, relais, statut sécurité, canControl
   - `POST /api/relay` : Commande relais (`{"command": "ON"}` ou `"OFF"`)
   - `GET /api/config` : Configuration actuelle
   - `POST /api/config` : Sauvegarde nouvelle configuration
@@ -48,14 +48,16 @@ L'ESP32 héberge une interface web accessible via son adresse IP :
   - `ballon/temperature` : Publication température (toutes les 15s)
   - `ballon/relais/state` : État du relais (`ON`/`OFF`)
   - `ballon/relais/command` : Commandes relais (`ON`/`OFF`)
-  - `ballon/status` : Statut système (`ONLINE`/`SAFETY`/`RESET`)
+  - `ballon/safety` : État sécurité (`SAFETY`/`OFF`)
+  - `ballon/status` : Statut système (`ONLINE`)
 
 Exemples :
 
 ```text
 Souscrire : ballon/relais/command   (payload: ON | OFF)
 Publier   : ballon/temperature      (ex: 22.3)
-Publier   : ballon/status           (ONLINE | SAFETY | RESET)
+Publier   : ballon/safety           (SAFETY | OFF)
+Publier   : ballon/status           (ONLINE)
 ```
 
 ## Configuration
@@ -70,15 +72,18 @@ Publier   : ballon/status           (ONLINE | SAFETY | RESET)
 
 ### Système de sécurité
 
-- **Coupure automatique** : Si température ≥ seuil max, le relais se coupe automatiquement
-- **Réarmement** : Quand température ≤ seuil reset, le système se réarme
+- **Coupure automatique** : Si température ≥ seuil max, le relais se coupe automatiquement et la sécurité s'active
+- **Publication MQTT** : État sécurité publié sur `ballon/safety` (`SAFETY`/`OFF`)
+- **Réarmement** : Quand température ≤ seuil reset, le système se réarme automatiquement
 - **Blocage commandes** : Pendant la sécurité active, les commandes sont bloquées
+- **Priorité** : La sécurité et les heures actives ont priorité sur les commandes manuelles
 
 ### Comportement horaire
 
-- **Synchronisation NTP** : Heure automatique via `pool.ntp.org`
+- **Synchronisation NTP** : Heure automatique via `pool.ntp.org` (GMT+1, heure été)
 - **Fenêtre active** : Contrôle possible uniquement dans la plage configurée
 - **Hors plage** : Le relais se coupe automatiquement si allumé
+- **Deep Sleep** : L'ESP32 passe en mode deep sleep en dehors des heures actives pour économiser l'énergie
 
 ## Prérequis
 
@@ -94,13 +99,34 @@ Publier   : ballon/status           (ONLINE | SAFETY | RESET)
 
 1. **Cloner le projet** dans PlatformIO
 2. **Configuration** : Modifier `include/config.h` :
+
    ```cpp
-   #define WIFI_SSID "votre_wifi"
-   #define WIFI_PASSWORD "votre_mot_de_passe"
-   #define MQTT_SERVER "192.168.1.xxx"
-   #define MQTT_USER "votre_user"
-   #define MQTT_PASSWORD "votre_password"
+   // include/config.h
+   #ifndef CONFIG_H
+   #define CONFIG_H
+
+   // 🔹 Wi-Fi
+   #define WIFI_SSID "******************"
+   #define WIFI_PASSWORD "******************"
+   // 🔹 MQTT
+   #define MQTT_SERVER "***.***.*.**"
+   #define MQTT_PORT       1883
+   #define MQTT_USER "*******************"
+   #define MQTT_PASSWORD "****"
+   // 🔹 Nom d'hôte
+   #define HOSTNAME        "esp-ballon"
+
+   #endif // CONFIG_H
    ```
+
+   **Remplacez les valeurs par vos propres paramètres :**
+
+   - `WIFI_SSID` : Nom de votre réseau Wi-Fi
+   - `WIFI_PASSWORD` : Mot de passe Wi-Fi
+   - `MQTT_SERVER` : Adresse IP de votre broker MQTT
+   - `MQTT_USER` : Nom d'utilisateur MQTT
+   - `MQTT_PASSWORD` : Mot de passe MQTT
+
 3. **Upload** : Compiler et téléverser via PlatformIO
 4. **Upload SPIFFS** : Téléverser les fichiers web (`data/` → SPIFFS)
 5. **Test** : Accéder à l'IP de l'ESP32 dans un navigateur

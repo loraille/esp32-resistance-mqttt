@@ -2,6 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ballon - Status</title>
   <link rel="stylesheet" href="style.css">
   <script src="script.js" defer></script>
@@ -9,9 +10,15 @@
 <body>
   <div class="card">
     <h1>🌡️ Ballon</h1>
+    <div class="version" id="version">v?.?.?</div>
     <div id="temp" class="temp">-- °C</div>
     <div id="status" class="status">Chargement...</div>
     <div id="controls"></div>
+
+    <div class="console-container">
+      <h3>📡 Console Système</h3>
+      <div id="mqtt-logs" class="mqtt-logs"></div>
+    </div>
 
     <footer>
       <a href="config.html" class="btn-config">⚙️ Configuration</a>

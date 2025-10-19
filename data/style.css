@@ -6,15 +6,21 @@ body {
     padding: 20px;
   }
   .card {
-    max-width: 400px;
+    max-width: 600px;
     margin: auto;
     background: white;
     border-radius: 12px;
     box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     padding: 30px;
   }
-  h1, h2 { color: #1a73e8; }
-  .temp { font-size: 3em; font-weight: bold; color: #e74c3c; }
+  h1, h2 { color: #1a73e8; margin: 10px 0; }
+  h3 { color: #333; font-size: 1.1em; margin: 15px 0 10px 0; }
+  .version {
+    font-size: 0.85em;
+    color: #888;
+    margin-bottom: 10px;
+  }
+  .temp { font-size: 2.5em; font-weight: bold; color: #e74c3c; margin: 10px 0; }
   .status { font-size: 1.2em; margin: 15px 0; }
   button {
     margin-top: 15px;
@@ -26,6 +32,48 @@ body {
     cursor: pointer;
   }
   button:hover { background: #219150; }
+
+  /* Console MQTT */
+  .console-container {
+    margin-top: 25px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    text-align: left;
+  }
+  .mqtt-logs {
+    max-height: 250px;
+    overflow-y: auto;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    padding: 12px;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+  .mqtt-logs div {
+    margin: 3px 0;
+    padding: 2px 0;
+  }
+  .mqtt-logs .in {
+    color: #4ec9b0;  /* Cyan - Messages MQTT entrants */
+  }
+  .mqtt-logs .out {
+    color: #ce9178;  /* Orange - Messages MQTT sortants */
+  }
+  .mqtt-logs .success {
+    color: #4ec980;  /* Vert - Succès */
+  }
+  .mqtt-logs .error {
+    color: #f48771;  /* Rouge - Erreurs */
+  }
+  .mqtt-logs .warning {
+    color: #dcdcaa;  /* Jaune - Warnings */
+  }
+  .mqtt-logs .temp {
+    color: #9cdcfe;  /* Bleu clair - Température */
+  }
   /* Bouton Sauvegarder déjà stylé */
 .save-btn {
   margin-top: 12px;
@@ -89,4 +137,87 @@ body {
   transform: translateY(1px);
 }
 
-  
+/* Formulaire configuration */
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  text-align: left;
+}
+
+form label {
+  display: flex;
+  flex-direction: column;
+  font-weight: 500;
+  color: #333;
+}
+
+form input {
+  margin-top: 5px;
+  padding: 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font-size: 1em;
+}
+
+/* Responsive Mobile */
+@media (max-width: 640px) {
+  body {
+    padding: 10px;
+  }
+  .card {
+    padding: 15px;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .temp {
+    font-size: 1.8em;
+  }
+  .status {
+    font-size: 0.95em;
+  }
+  h1 {
+    font-size: 1.5em;
+  }
+  h2 {
+    font-size: 1.3em;
+  }
+  h3 {
+    font-size: 1em;
+  }
+  .version {
+    font-size: 0.75em;
+  }
+  .mqtt-logs {
+    font-size: 0.65em;
+    max-height: 180px;
+  }
+
+  /* Boutons qui ne dépassent pas */
+  button, .save-btn, .btn-config, .btn-retour {
+    width: 100%;
+    margin: 8px 0;
+    box-sizing: border-box;
+    display: block;
+  }
+
+  /* Footer avec boutons */
+  footer {
+    margin-top: 20px;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  /* Console qui touche les bords */
+  .console-container {
+    margin-left: -15px;
+    margin-right: -15px;
+    padding: 15px;
+  }
+
+  /* Formulaire */
+  form {
+    margin-left: 0;
+    margin-right: 0;
+  }
+}

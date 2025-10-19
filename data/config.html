@@ -2,6 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Config Ballon</title>
   <link rel="stylesheet" href="style.css">
   <script src="script.js" defer></script>
@@ -10,24 +11,28 @@
   <div class="card">
     <h2>⚙️ Configuration</h2>
     <form id="configForm">
-      <label>Heure début :
+      <label>
+        Heure début :
         <input type="number" id="start" name="start" min="0" max="24">
       </label>
-      <label>Heure fin :
+      <label>
+        Heure fin :
         <input type="number" id="end" name="end" min="0" max="24">
       </label>
-      <label>Température max :
+      <label>
+        Température max :
         <input type="number" step="0.1" id="tmax" name="tmax">
       </label>
-      <label>Réarmement :
+      <label>
+        Réarmement :
         <input type="number" step="0.1" id="treset" name="treset">
       </label>
       <button type="submit" class="save-btn">💾 Sauvegarder</button>
     </form>
 
-    <p>
+    <footer>
       <a href="/" class="btn-retour">← Retour</a>
-    </p>
+    </footer>
   </div>
 </body>
 </html>

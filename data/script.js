@@ -3,6 +3,12 @@ async function fetchStatus() {
     const data = await res.json();
     document.getElementById("temp").textContent = Math.ceil(data.temperature, 1) + " °C";
     document.getElementById("status").textContent = data.status;
+
+    // Afficher la version
+    if (data.version) {
+      document.getElementById("version").textContent = "v" + data.version;
+    }
+
     const controls = document.getElementById("controls");
     if (data.canControl) {
       controls.innerHTML = `
@@ -11,6 +17,32 @@ async function fetchStatus() {
         </button>`;
     } else {
       controls.innerHTML = `<p class="safety">Commande bloquée</p>`;
+    }
+  }
+
+  async function fetchLogs() {
+    const res = await fetch("/api/logs");
+    const data = await res.json();
+    const logsDiv = document.getElementById("mqtt-logs");
+
+    if (data.logs && data.logs.length > 0) {
+      logsDiv.innerHTML = data.logs.map(log => {
+        // Colorer les différents types de messages
+        let className = "";
+        if (log.includes("←")) className = "in";          // Messages MQTT entrants
+        else if (log.includes("→")) className = "out";    // Messages MQTT sortants
+        else if (log.includes("✅")) className = "success"; // Succès
+        else if (log.includes("❌") || log.includes("🛑")) className = "error"; // Erreurs
+        else if (log.includes("⚠️")) className = "warning"; // Warnings
+        else if (log.includes("🌡️")) className = "temp";    // Température
+
+        return `<div class="${className}">${log}</div>`;
+      }).join("");
+
+      // Auto-scroll vers le bas
+      logsDiv.scrollTop = logsDiv.scrollHeight;
+    } else {
+      logsDiv.innerHTML = '<div style="color: #888;">Aucun log disponible</div>';
     }
   }
   
@@ -43,16 +75,27 @@ async function fetchStatus() {
           temp_max: parseFloat(document.getElementById("tmax").value),
           temp_reset: parseFloat(document.getElementById("treset").value)
         };
-        await fetch("/api/config", {
+        const res = await fetch("/api/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(cfg)
         });
-        alert("Config sauvegardée !");
+        const data = await res.json();
+        if (data.reboot) {
+          alert("⚙️ Configuration sauvegardée !\n\nL'ESP32 va redémarrer dans 2 secondes...");
+          setTimeout(() => {
+            window.location.href = "/";
+          }, 3000);
+        } else {
+          alert("Config sauvegardée !");
+        }
       });
     } else {
+      // Page principale
       fetchStatus();
+      fetchLogs();
       setInterval(fetchStatus, 5000);
+      setInterval(fetchLogs, 3000);  // Rafraîchir les logs plus fréquemment
     }
   });
   

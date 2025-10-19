@@ -10,16 +10,19 @@
 #include "config.h"
 #include "esp_sleep.h"
 
+// ==================== VERSION ====================
+#define FIRMWARE_VERSION "1.2.0"
+
 // ==================== BROCHES ====================
 #define ONE_WIRE_BUS    32
 #define RELAY_PIN       33
 #define LED_ACTIVE_PIN  26
 #define LED_RELAY_PIN   27
+#define WAKE_BUTTON_PIN 12   // Bouton de réveil (GPIO12)
 
 // ==================== OBJETS ====================
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
-
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 WebServer server(80);
@@ -35,6 +38,8 @@ const char* mqtt_topic_status  = "ballon/status";
 unsigned long lastMqtt = 0;
 bool relayState = false;
 bool safetyActive = false;
+bool manualWakeMode = false;
+unsigned long wakeEndTime = 0;
 
 struct Config {
   int active_start_hour;
@@ -43,6 +48,20 @@ struct Config {
   float temp_reset;
 };
 Config config;
+
+// ==================== LOGS CONSOLE ====================
+#define MAX_CONSOLE_LOGS 50
+String consoleLogs[MAX_CONSOLE_LOGS];
+int consoleLogIndex = 0;
+
+void addLog(String log) {
+  // Ajouter au buffer circulaire
+  consoleLogs[consoleLogIndex] = log;
+  consoleLogIndex = (consoleLogIndex + 1) % MAX_CONSOLE_LOGS;
+
+  // Afficher aussi sur Serial
+  Serial.println(log);
+}
 
 // ==================== NTP ====================
 const char* ntpServer = "pool.ntp.org";
@@ -86,52 +105,43 @@ bool isActiveHour() {
   struct tm *ptm = localtime(&now);
   if (!ptm) return true;
   int hour = ptm->tm_hour;
-
   int start = config.active_start_hour;
   int end   = config.active_end_hour;
 
   if (end == 24) end = 0;
+  if (start < end) return (hour >= start && hour < end);
+  else return (hour >= start || hour < end);
+}
 
-  if (start < end) {
-    return (hour >= start && hour < end);
+void setupNTP() {
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  addLog("⏳ Synchronisation NTP...");
+  int attempts = 0;
+  while (time(nullptr) < 100000 && attempts < 20) {
+    delay(500);
+    attempts++;
+  }
+  if (time(nullptr) >= 100000) {
+    addLog("✅ NTP synchronisé");
   } else {
-    return (hour >= start || hour < end);
+    addLog("⚠️ NTP timeout");
   }
 }
 
-// ==================== 🔌 FONCTIONS AJOUTÉES ====================
-
-// 🆕 Désactive totalement WiFi et Bluetooth
+// ==================== CONNEXION ====================
 void disableWireless() {
-  Serial.println("📴 Désactivation WiFi & Bluetooth...");
-  mqttClient.disconnect();
+  addLog("📴 Désactivation WiFi & Bluetooth...");
+  if (mqttClient.connected()) {
+    mqttClient.publish(mqtt_topic_status, "OFFLINE", true);
+    addLog("→ MQTT: ballon/status = OFFLINE");
+    mqttClient.loop();
+    delay(100);
+    mqttClient.disconnect();
+  }
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   btStop();
-  Serial.println("📡 WiFi & Bluetooth OFF");
-}
-
-// 🆕 Vérifie les connexions réseau/MQTT et publie ONLINE/OFFLINE
-void checkConnections() {
-  static bool wasOnline = true;
-  bool wifiOK = (WiFi.status() == WL_CONNECTED);
-  bool mqttOK = mqttClient.connected();
-
-  if (!wifiOK || !mqttOK) {
-    if (wasOnline) {
-      Serial.println("🔴 Réseau ou MQTT déconnecté -> OFFLINE");
-      if (mqttClient.connected())
-        mqttClient.publish(mqtt_topic_status, "OFFLINE", true);
-      wasOnline = false;
-      disableWireless();
-    }
-  } else {
-    if (!wasOnline) {
-      Serial.println("🟢 Connexion rétablie -> ONLINE");
-      mqttClient.publish(mqtt_topic_status, "ONLINE", true);
-      wasOnline = true;
-    }
-  }
+  addLog("📡 WiFi & Bluetooth OFF");
 }
 
 // ==================== SÉCURITÉ ====================
@@ -142,44 +152,74 @@ void updateSafety() {
 
   static float lastTemp = -999;
   if (fabs(temp - lastTemp) >= 0.5) {
-    Serial.printf("🌡️ Température mesurée : %.1f °C\n", temp);
+    char buf[50];
+    sprintf(buf, "🌡️ Température mesurée : %.1f °C", temp);
+    addLog(buf);
     lastTemp = temp;
   }
 
   if (temp >= config.temp_max) {
     if (!safetyActive) {
       safetyActive = true;
-      Serial.printf("🛑 Sécurité activée ! Température = %.1f °C (>= %.1f °C max)\n", temp, config.temp_max);
-      mqttClient.publish(mqtt_topic_safety, "SAFETY", true);
+      char buf[60];
+      sprintf(buf, "🛑 Sécurité activée ! Température = %.1f °C", temp);
+      addLog(buf);
+      if (mqttClient.connected()) {
+        mqttClient.publish(mqtt_topic_safety, "SAFETY", true);
+        addLog("→ MQTT: ballon/safety = SAFETY");
+      }
     }
   }
   else if (safetyActive && temp <= config.temp_reset) {
     safetyActive = false;
-    Serial.printf("✅ Sécurité réarmée ! Température = %.1f °C (<= %.1f °C reset)\n", temp, config.temp_reset);
-    mqttClient.publish(mqtt_topic_safety, "OFF", true);
+    char buf[60];
+    sprintf(buf, "✅ Sécurité réarmée ! Température = %.1f °C", temp);
+    addLog(buf);
+    if (mqttClient.connected()) {
+      mqttClient.publish(mqtt_topic_safety, "OFF", true);
+      addLog("→ MQTT: ballon/safety = OFF");
+    }
   }
 }
 
 // ==================== RELAIS ====================
-void updateRelay() {
+void updateRelay(bool forcePublish = false) {
   bool prevState = relayState;
+  bool actualState = relayState;
 
-  if (safetyActive || !isActiveHour()) relayState = false;
-
-  digitalWrite(RELAY_PIN, relayState ? HIGH : LOW);
-  digitalWrite(LED_RELAY_PIN, relayState ? HIGH : LOW);
-
-  mqttClient.publish(mqtt_topic_state, relayState ? "ON" : "OFF", true);
-
-  if (relayState != prevState) {
-    Serial.printf("⚡ Relais %s\n", relayState ? "ON" : "OFF");
+  // Forcer OFF si sécurité active OU hors heures actives (sauf mode réveil manuel)
+  if (safetyActive || (!isActiveHour() && !manualWakeMode)) {
+    actualState = false;
   }
+
+  digitalWrite(RELAY_PIN, actualState ? HIGH : LOW);
+  digitalWrite(LED_RELAY_PIN, actualState ? HIGH : LOW);
+
+  // Publier MQTT si l'état a changé OU si forcePublish = true
+  if (actualState != prevState || forcePublish) {
+    String state = actualState ? "ON" : "OFF";
+
+    if (actualState != prevState) {
+      addLog("⚡ Relais " + state);
+    }
+
+    if (mqttClient.connected()) {
+      mqttClient.publish(mqtt_topic_state, state.c_str(), true);
+      if (forcePublish && actualState == prevState) {
+        addLog("→ MQTT: ballon/relais/state = " + state + " (confirmation)");
+      } else {
+        addLog("→ MQTT: ballon/relais/state = " + state);
+      }
+    }
+  }
+
+  // Mettre à jour relayState avec l'état réel
+  relayState = actualState;
 }
 
 // ==================== WIFI & MQTT ====================
 void setup_wifi() {
-  Serial.println("📡 Connexion WiFi...");
-
+  addLog("📡 Connexion WiFi...");
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(HOSTNAME);
@@ -192,22 +232,11 @@ void setup_wifi() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ WiFi connecté !");
-    Serial.print("   • IP locale : ");
-    Serial.println(WiFi.localIP());
-    Serial.print("   • Hostname  : ");
-    Serial.println(WiFi.getHostname());
-    Serial.print("   • RSSI      : ");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm");
+    addLog("✅ WiFi connecté !");
+    addLog("IP : " + WiFi.localIP().toString());
   } else {
-    Serial.println("\n❌ Impossible de se connecter au WiFi !");
+    addLog("❌ Impossible de se connecter au WiFi !");
   }
-}
-
-void setupNTP() {
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  while (time(nullptr) < 100000) delay(500);
 }
 
 void callbackMQTT(char* topic, byte* payload, unsigned int length) {
@@ -215,56 +244,59 @@ void callbackMQTT(char* topic, byte* payload, unsigned int length) {
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
   msg.trim();
 
+  addLog("← MQTT: " + String(topic) + " = " + msg);
+
   if (String(topic) == mqtt_topic_command) {
-    if (msg == "ON") relayState = true;
-    else if (msg == "OFF") relayState = false;
-    updateRelay();
+    // Vérifier si la commande peut être exécutée
+    bool canControl = !safetyActive && (isActiveHour() || manualWakeMode);
+
+    if (msg == "ON") {
+      if (canControl) {
+        relayState = true;
+      } else {
+        addLog("⚠️ Commande ON rejetée (hors horaires ou sécurité active)");
+        relayState = false; // Forcer à OFF
+      }
+    } else if (msg == "OFF") {
+      relayState = false;
+    }
+
+    // TOUJOURS publier l'état après une commande MQTT (même si pas de changement)
+    updateRelay(true); // forcePublish = true
   }
 }
 
 void reconnectMQTT() {
-  while (!mqttClient.connected()) {
+  if (!mqttClient.connected()) {
+    addLog("🔌 Tentative connexion MQTT...");
     if (mqttClient.connect(HOSTNAME, MQTT_USER, MQTT_PASSWORD)) {
       mqttClient.subscribe(mqtt_topic_command);
       mqttClient.publish(mqtt_topic_status, "ONLINE", true);
+      addLog("→ MQTT: ballon/status = ONLINE");
+
+      String safetyMsg = safetyActive ? "SAFETY" : "OFF";
+      mqttClient.publish(mqtt_topic_safety, safetyMsg.c_str(), true);
+      addLog("→ MQTT: ballon/safety = " + safetyMsg);
+
       updateRelay();
-      mqttClient.publish(mqtt_topic_safety, safetyActive ? "SAFETY" : "OFF", true);
+      addLog("✅ MQTT connecté");
     } else {
-      delay(5000);
+      char buf[50];
+      sprintf(buf, "❌ MQTT échec, code=%d", mqttClient.state());
+      addLog(buf);
     }
   }
 }
 
 // ==================== API JSON ====================
 void setupApi() {
+  // Fichiers statiques
   server.serveStatic("/", SPIFFS, "/index.html");
   server.serveStatic("/config.html", SPIFFS, "/config.html");
   server.serveStatic("/style.css", SPIFFS, "/style.css");
   server.serveStatic("/script.js", SPIFFS, "/script.js");
 
-  server.on("/api/status", HTTP_GET, []() {
-    sensors.requestTemperatures();
-    float temp = sensors.getTempCByIndex(0);
-    StaticJsonDocument<256> doc;
-    doc["temperature"] = (temp == DEVICE_DISCONNECTED_C ? -127 : temp);
-    doc["relay"] = relayState;
-    doc["status"] = safetyActive ? "Sécurité active" : (relayState ? "Relais ON" : "Relais OFF");
-    doc["canControl"] = (!safetyActive && isActiveHour());
-    String json;
-    serializeJson(doc, json);
-    server.send(200, "application/json", json);
-  });
-
-  server.on("/api/relay", HTTP_POST, []() {
-    StaticJsonDocument<128> doc;
-    deserializeJson(doc, server.arg("plain"));
-    String cmd = doc["command"];
-    if (cmd == "ON") relayState = true;
-    if (cmd == "OFF") relayState = false;
-    updateRelay();
-    server.send(200, "application/json", "{\"ok\":true}");
-  });
-
+  // GET config
   server.on("/api/config", HTTP_GET, []() {
     StaticJsonDocument<256> doc;
     doc["active_start_hour"] = config.active_start_hour;
@@ -276,56 +308,163 @@ void setupApi() {
     server.send(200, "application/json", json);
   });
 
+  // POST config
   server.on("/api/config", HTTP_POST, []() {
     StaticJsonDocument<256> doc;
-    deserializeJson(doc, server.arg("plain"));
+    DeserializationError error = deserializeJson(doc, server.arg("plain"));
+    if(error){
+      Serial.print("❌ JSON Error: "); Serial.println(error.c_str());
+      server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+      return;
+    }
+
     config.active_start_hour = doc["active_start_hour"];
-    config.active_end_hour = doc["active_end_hour"];
-    config.temp_max = doc["temp_max"];
-    config.temp_reset = doc["temp_reset"];
+    config.active_end_hour   = doc["active_end_hour"];
+    config.temp_max          = doc["temp_max"];
+    config.temp_reset        = doc["temp_reset"];
     saveConfig();
-    server.send(200, "application/json", "{\"saved\":true}");
+
+    Serial.println("💾 Config sauvegardée, reboot dans 2 secondes...");
+    server.send(200, "application/json", "{\"saved\":true,\"reboot\":true}");
+
+    delay(2000);
+    ESP.restart();
   });
+
+  // GET status
+  server.on("/api/status", HTTP_GET, []() {
+    sensors.requestTemperatures();
+    float temp = sensors.getTempCByIndex(0);
+    StaticJsonDocument<512> doc;
+    doc["temperature"] = (temp == DEVICE_DISCONNECTED_C ? -127 : temp);
+    doc["relay"] = relayState;
+    doc["status"] = safetyActive ? "Sécurité active" : (relayState ? "Relais ON" : "Relais OFF");
+    doc["canControl"] = (!safetyActive && (isActiveHour() || manualWakeMode));
+    doc["version"] = FIRMWARE_VERSION;
+    doc["manualMode"] = manualWakeMode;
+    String json;
+    serializeJson(doc, json);
+    server.send(200, "application/json", json);
+  });
+
+  // GET logs console
+  server.on("/api/logs", HTTP_GET, []() {
+    StaticJsonDocument<4096> doc;
+    JsonArray logs = doc.createNestedArray("logs");
+
+    // Récupérer les logs dans l'ordre chronologique
+    for (int i = 0; i < MAX_CONSOLE_LOGS; i++) {
+      int idx = (consoleLogIndex + i) % MAX_CONSOLE_LOGS;
+      if (consoleLogs[idx].length() > 0) {
+        logs.add(consoleLogs[idx]);
+      }
+    }
+
+    String json;
+    serializeJson(doc, json);
+    server.send(200, "application/json", json);
+  });
+
+  // POST relay
+  server.on("/api/relay", HTTP_POST, []() {
+    StaticJsonDocument<128> doc;
+    DeserializationError error = deserializeJson(doc, server.arg("plain"));
+    if(error){
+      addLog("❌ JSON Error relay: " + String(error.c_str()));
+      server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+      return;
+    }
+
+    String cmd = doc["command"];
+    bool canControl = !safetyActive && (isActiveHour() || manualWakeMode);
+
+    if(cmd == "ON") {
+      if (canControl) {
+        relayState = true;
+        addLog("🌐 Commande WEB: ON acceptée");
+      } else {
+        addLog("⚠️ Commande WEB ON rejetée (hors horaires ou sécurité active)");
+        relayState = false;
+      }
+    } else if(cmd == "OFF") {
+      relayState = false;
+      addLog("🌐 Commande WEB: OFF");
+    }
+
+    // Toujours publier l'état MQTT après commande web
+    updateRelay(true);
+    server.send(200, "application/json", "{\"ok\":true}");
+  });
+
+  // Route non trouvée
+  server.onNotFound([]() {
+    Serial.printf("⚠️ Requête inconnue : %s\n", server.uri().c_str());
+    server.send(404, "text/plain", "Not found");
+  });
+
+  server.begin();
+  Serial.println("🌐 Serveur Web démarré");
 }
+
 
 // ==================== SETUP ====================
 void setup() {
   Serial.begin(115200);
+  delay(500);
+  addLog("\n========== DÉMARRAGE ==========");
+
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(LED_ACTIVE_PIN, OUTPUT);
   pinMode(LED_RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW);
+  pinMode(WAKE_BUTTON_PIN, INPUT_PULLUP);
 
-  if(!SPIFFS.begin(true)) {
-    Serial.println("❌ SPIFFS init failed");
+  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(LED_ACTIVE_PIN, LOW);
+  digitalWrite(LED_RELAY_PIN, LOW);
+
+  if (!SPIFFS.begin(true)) {
+    addLog("❌ SPIFFS init failed");
     return;
   }
+
   loadConfig();
+
+  // Vérifier la cause du réveil
+  esp_sleep_wakeup_cause_t wakeupReason = esp_sleep_get_wakeup_cause();
+  bool wakeupButton = (wakeupReason == ESP_SLEEP_WAKEUP_EXT0);
+
+  if (wakeupButton) {
+    addLog("🔘 Réveil manuel par le bouton !");
+    manualWakeMode = true;
+    wakeEndTime = millis() + 5UL * 60UL * 1000UL; // 5 minutes
+  } else {
+    addLog("⏰ Réveil programmé ou premier démarrage");
+  }
+
   setup_wifi();
   setupNTP();
-
   sensors.begin();
+  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+  mqttClient.setCallback(callbackMQTT);
+  setupApi();
+
+  // Connexion MQTT initiale
+  reconnectMQTT();
 
   updateSafety();
   updateRelay();
 
-  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
-  mqttClient.setCallback(callbackMQTT);
-
-  setupApi();
-  server.begin();
-
-  if (!isActiveHour()) {
-    Serial.println("🌙 Pas dans les heures actives -> deep-sleep immédiat");
+  // Si hors heures actives ET pas de réveil manuel -> deep sleep
+  if (!isActiveHour() && !manualWakeMode) {
+    addLog("🌙 Hors heures actives -> deep sleep immédiat");
 
     time_t now = time(nullptr);
     struct tm *ptm = localtime(&now);
     int hour = ptm->tm_hour;
     int minutes = ptm->tm_min;
     int seconds = ptm->tm_sec;
-
     int start = config.active_start_hour;
-    int end   = config.active_end_hour;
+    int end = config.active_end_hour;
 
     int nextWakeHour = start;
     if (hour >= end) nextWakeHour = start + 24;
@@ -334,35 +473,113 @@ void setup() {
     int secondsToWake = hoursToWake * 3600 - (minutes * 60 + seconds);
     if (secondsToWake < 60) secondsToWake = 60;
 
-    Serial.printf("⏱️ Réveil dans %d secondes\n", secondsToWake);
-    disableWireless();   // 🆕
+    char buf[80];
+    sprintf(buf, "⏱️ Réveil auto dans %d secondes (%.1f heures)", secondsToWake, secondsToWake / 3600.0);
+    addLog(buf);
+
+    disableWireless();
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_12, 0);
     esp_sleep_enable_timer_wakeup((uint64_t)secondsToWake * 1000000ULL);
     esp_deep_sleep_start();
   }
+
+  // Activer le wake-up par bouton pour le prochain deep sleep
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_12, 0);
+
+  addLog("========== SETUP TERMINÉ ==========");
 }
 
 // ==================== LOOP ====================
 void loop() {
-  if (!mqttClient.connected()) reconnectMQTT();
   mqttClient.loop();
   server.handleClient();
 
-  digitalWrite(LED_ACTIVE_PIN, isActiveHour() ? HIGH : LOW);
+  // ===== MODE RÉVEIL MANUEL =====
+  if (manualWakeMode) {
+    // LED verte clignotante
+    static unsigned long lastLedToggle = 0;
+    if (millis() - lastLedToggle >= 500) {
+      digitalWrite(LED_ACTIVE_PIN, !digitalRead(LED_ACTIVE_PIN));
+      lastLedToggle = millis();
+    }
 
-  checkConnections(); // 🆕
+    // Reconnexion MQTT si nécessaire
+    if (!mqttClient.connected()) {
+      reconnectMQTT();
+    }
 
-  if (millis() - lastMqtt > 15000) {
+    // Envoi MQTT toutes les 15 secondes
+    if (millis() - lastMqtt >= 15000) {
+      sensors.requestTemperatures();
+      float temp = sensors.getTempCByIndex(0);
+      if (temp != DEVICE_DISCONNECTED_C && mqttClient.connected()) {
+        mqttClient.publish(mqtt_topic_temp, String(temp, 1).c_str(), true);
+        addLog("→ MQTT: ballon/temperature = " + String(temp, 1));
+      }
+      updateSafety();
+      updateRelay();
+      lastMqtt = millis();
+    }
+
+    // Vérifier fin du mode manuel (5 minutes)
+    if (millis() >= wakeEndTime) {
+      addLog("⏱️ Fin du mode réveil manuel (5 min écoulées)");
+      manualWakeMode = false;
+      disableWireless();
+      esp_sleep_enable_ext0_wakeup(GPIO_NUM_12, 0);
+      esp_deep_sleep_start();
+    }
+
+    return;
+  }
+
+  // ===== MODE NORMAL (heures actives) =====
+  digitalWrite(LED_ACTIVE_PIN, HIGH);
+
+  if (!mqttClient.connected()) {
+    reconnectMQTT();
+  }
+
+  // Envoi MQTT toutes les 15 secondes
+  if (millis() - lastMqtt >= 15000) {
     sensors.requestTemperatures();
     float temp = sensors.getTempCByIndex(0);
-    if (temp != DEVICE_DISCONNECTED_C) {
-      Serial.printf("🌡️ Envoi MQTT : %.1f °C\n", temp);
+    if (temp != DEVICE_DISCONNECTED_C && mqttClient.connected()) {
       mqttClient.publish(mqtt_topic_temp, String(temp, 1).c_str(), true);
-    } else {
-      Serial.println("⚠️ Capteur de température non détecté !");
+      addLog("→ MQTT: ballon/temperature = " + String(temp, 1));
     }
     lastMqtt = millis();
   }
 
   updateSafety();
   updateRelay();
+
+  // Vérifier si on doit passer en deep sleep
+  if (!isActiveHour()) {
+    addLog("🌙 Hors heures actives -> passage en deep sleep");
+    disableWireless();
+
+    time_t now = time(nullptr);
+    struct tm *ptm = localtime(&now);
+    int hour = ptm->tm_hour;
+    int minutes = ptm->tm_min;
+    int seconds = ptm->tm_sec;
+    int start = config.active_start_hour;
+    int end = config.active_end_hour;
+
+    int nextWakeHour = start;
+    if (hour >= end) nextWakeHour = start + 24;
+
+    int hoursToWake = nextWakeHour - hour;
+    int secondsToWake = hoursToWake * 3600 - (minutes * 60 + seconds);
+    if (secondsToWake < 60) secondsToWake = 60;
+
+    char buf[80];
+    sprintf(buf, "⏱️ Réveil auto dans %d secondes (%.1f heures)", secondsToWake, secondsToWake / 3600.0);
+    addLog(buf);
+
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_12, 0);
+    esp_sleep_enable_timer_wakeup((uint64_t)secondsToWake * 1000000ULL);
+    esp_deep_sleep_start();
+  }
 }

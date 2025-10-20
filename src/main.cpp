@@ -7,11 +7,12 @@
 #include <FS.h>
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
+#include <ArduinoOTA.h>
 #include "config.h"
 #include "esp_sleep.h"
 
 // ==================== VERSION ====================
-#define FIRMWARE_VERSION "1.2.0"
+#define FIRMWARE_VERSION "1.3.0"
 
 // ==================== BROCHES ====================
 #define ONE_WIRE_BUS    32
@@ -126,6 +127,37 @@ void setupNTP() {
   } else {
     addLog("⚠️ NTP timeout");
   }
+}
+
+// ==================== OTA ====================
+void setupOTA() {
+  ArduinoOTA.setHostname(HOSTNAME);
+  ArduinoOTA.setPassword("ballon123"); // Mot de passe pour l'OTA
+  
+  ArduinoOTA.onStart([]() {
+    addLog("🚀 Mise à jour OTA démarrée");
+    digitalWrite(LED_ACTIVE_PIN, HIGH);
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    addLog("✅ Mise à jour OTA terminée");
+    digitalWrite(LED_ACTIVE_PIN, LOW);
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    char buf[50];
+    sprintf(buf, "📦 Progression OTA: %u%%", (progress / (total / 100)));
+    addLog(buf);
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    char buf[50];
+    sprintf(buf, "❌ Erreur OTA: %u", error);
+    addLog(buf);
+  });
+  
+  ArduinoOTA.begin();
+  addLog("🔄 OTA activé - Hostname: " + String(HOSTNAME));
 }
 
 // ==================== CONNEXION ====================
@@ -443,6 +475,7 @@ void setup() {
 
   setup_wifi();
   setupNTP();
+  setupOTA();
   sensors.begin();
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
   mqttClient.setCallback(callbackMQTT);
@@ -491,6 +524,7 @@ void setup() {
 
 // ==================== LOOP ====================
 void loop() {
+  ArduinoOTA.handle();
   mqttClient.loop();
   server.handleClient();
 
